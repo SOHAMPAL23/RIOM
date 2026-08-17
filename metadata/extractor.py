@@ -395,13 +395,43 @@ class MetadataExtractor:
                         if em.lower() not in [e.lower() for e in meeting_emails] and not em.lower().startswith(("noreply", "no-reply", "support")):
                             meeting_emails.append(em)
 
+                    # Extract discussion points and action items
+                    discussion_pts: list[str] = []
+                    action_items: list[str] = []
+                    in_action_section = False
+                    in_disc_section = False
+
+                    for line in combined_str.splitlines():
+                        line_s = line.strip()
+                        if not line_s:
+                            continue
+                        if re.search(r"\b(?:action items?|tasks?|to-?do)\b", line_s, re.IGNORECASE):
+                            in_action_section = True
+                            in_disc_section = False
+                            continue
+                        elif re.search(r"\b(?:discussion|agenda|notes?|topics?)\b", line_s, re.IGNORECASE):
+                            in_disc_section = True
+                            in_action_section = False
+                            continue
+
+                        if line_s.startswith(("-", "*", "•", "–")) or re.match(r"^\d+[\.\)]\s+", line_s):
+                            clean_pt = re.sub(r"^[-*•–\d\.\)]+\s*", "", line_s).strip()
+                            if len(clean_pt) > 5:
+                                if in_action_section or re.search(r"\b(?:to review|to test|to build|to follow up|assigned to)\b", clean_pt, re.IGNORECASE):
+                                    action_items.append(clean_pt)
+                                elif in_disc_section or len(discussion_pts) < 4:
+                                    discussion_pts.append(clean_pt)
+
                     meetings.append(
                         Meeting(
                             title=m_title,
                             participants=participants[:5],
+                            time=ts_str[11:16] if ts_str else None,
                             platform=platform_found,
                             meeting_link=meeting_link,
                             emails=meeting_emails[:5],
+                            discussion_points=discussion_pts[:5],
+                            action_items=action_items[:5],
                             source_frame_ids=fids,
                             source_timestamps=tss,
                         )
@@ -409,12 +439,13 @@ class MetadataExtractor:
 
             # 4. Appointments & Deadlines (Strict matching — requires explicit event + time)
             time_match = re.search(
-                r"\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?|\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}\b)",
+                r"\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?|\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b(?:\s+\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)?|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2}(?:,\s*\d{4})?(?:\s+at\s+\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)?)\b",
                 combined_str,
+                re.IGNORECASE,
             )
             has_appt_kw = bool(
                 re.search(
-                    r"\b(?:deadline|due date|scheduled sync|roadmap sync|calendar invite|quarterly sync|dentist|doctor|interview at|sync at)\b",
+                    r"\b(?:deadline|due date|scheduled sync|roadmap sync|calendar invite|quarterly sync|dentist|doctor|interview at|sync at|on friday|on monday|due by)\b",
                     combined_str,
                     re.IGNORECASE,
                 )
@@ -423,9 +454,9 @@ class MetadataExtractor:
                 # Find the line containing the keyword for a descriptive title
                 appt_title = ""
                 for line in combined_str.splitlines():
-                    if re.search(r"\b(?:deadline|due|sync|schedule|calendar|roadmap)\b", line, re.IGNORECASE):
-                        clean_line = re.sub(r"[^\w\s\-:–—]", " ", line).strip()
-                        if 4 < len(clean_line) <= 60:
+                    if re.search(r"\b(?:deadline|due|sync|schedule|calendar|roadmap|interview|meeting)\b", line, re.IGNORECASE):
+                        clean_line = re.sub(r"[^\w\s\-:–—@.]", " ", line).strip()
+                        if 4 < len(clean_line) <= 70:
                             appt_title = clean_line
                             break
 
@@ -438,10 +469,12 @@ class MetadataExtractor:
                         Appointment(
                             title=appt_title,
                             time=time_match.group(1),
+                            deadline=time_match.group(1) if "due" in combined_str.lower() or "deadline" in combined_str.lower() else None,
                             source_frame_ids=fids,
                             source_timestamps=tss,
                         )
                     )
+
 
             # 5. People Extraction
             email_matches = re.findall(r"\b([a-zA-Z0-9_.+\-]+@[a-zA-Z0-9\-]+\.[a-zA-Z0-9\-.]+)\b", combined_str)
