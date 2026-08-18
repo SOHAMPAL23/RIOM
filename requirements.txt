@@ -1,0 +1,32 @@
+# Ambient Screen Understanding — Dependencies
+#
+# Install with: pip install -r requirements.txt
+#
+# Core pipeline
+mss>=9.0.1              # Cross-platform screen capture
+opencv-python>=4.9.0    # Change detection and image processing
+paddlepaddle>=2.6.0     # PaddleOCR backend (CPU)
+paddleocr>=2.7.0        # OCR engine
+
+# Structured data
+pydantic>=2.7.0         # Schema validation for all data contracts
+pydantic-settings>=2.3  # Settings management with env-var support
+
+# LLM integration
+openai>=1.35.0          # OpenAI-compatible client
+
+# Desktop UI
+PySide6>=6.7.0          # Qt6 Python bindings
+
+# Storage
+# sqlite3 is part of Python's standard library — no package needed
+
+# Image handling
+Pillow>=10.3.0          # WebP read support (OpenCV handles writes)
+
+# Development / testing
+pytest>=8.2.0
+pytest-cov>=5.0.0
+
+# Optional: env file support
+python-dotenv>=1.0.0
