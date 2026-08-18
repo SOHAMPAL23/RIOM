@@ -42,6 +42,41 @@ def is_supported(raw_text: str, query: str) -> bool:
     return norm_query in norm_raw
 
 
+def is_supported_url(raw_text: str, url: str) -> bool:
+    """
+    Checks if a URL or its primary path/host components are grounded in raw screen text.
+    Handles differences in scheme (http vs https vs none), subdomains, and trailing slashes.
+    """
+    if not url:
+        return True
+    
+    # 1. Exact or normalized full URL match
+    if is_supported(raw_text, url):
+        return True
+    
+    # 2. Scheme-stripped & www-stripped match (e.g. 'meet.google.com/abc-xyz' or 'docs.google.com/document/d/...')
+    clean_url = re.sub(r"^https?://", "", url.strip(), flags=re.IGNORECASE).rstrip("/")
+    if is_supported(raw_text, clean_url):
+        return True
+    
+    clean_no_www = re.sub(r"^www\.", "", clean_url, flags=re.IGNORECASE)
+    if is_supported(raw_text, clean_no_www):
+        return True
+
+    # 3. Path / Code match (e.g. 'abc-defg-hij' or 'riom-sprint-plan' or 'riom-brief' or repo name)
+    segments = [seg for seg in clean_no_www.split("/") if len(seg) >= 6]
+    for seg in segments:
+        if is_supported(raw_text, seg):
+            return True
+
+    # 4. Host match if domain is specific
+    host = clean_no_www.split("/")[0]
+    if len(host) >= 8 and is_supported(raw_text, host):
+        return True
+
+    return False
+
+
 class MetadataVerifier:
     """
     Verifies StructuredMetadata against the original raw OCR text.
@@ -88,8 +123,15 @@ class MetadataVerifier:
             # Check fields
             unsupported: list[str] = []
             
-            if not is_supported(raw_text, m.title):
+            title_ok = is_supported(raw_text, m.title)
+            link_ok = bool(m.meeting_link and is_supported_url(raw_text, m.meeting_link))
+            platform_ok = bool(m.platform and is_supported(raw_text, m.platform))
+
+            if not title_ok and not link_ok:
                 unsupported.append("title")
+
+            if m.meeting_link and not link_ok:
+                unsupported.append("meeting_link")
             
             for p in m.participants:
                 if not is_supported(raw_text, p):
@@ -98,7 +140,7 @@ class MetadataVerifier:
             if m.time and not is_supported(raw_text, m.time):
                 unsupported.append("time")
             
-            if m.platform and not is_supported(raw_text, m.platform):
+            if m.platform and not platform_ok:
                 unsupported.append("platform")
             
             for dp in m.discussion_points:
@@ -110,9 +152,11 @@ class MetadataVerifier:
                     unsupported.append(f"action_item:{ai}")
 
             # Assign status
+            core_supported = ("title" not in unsupported) or link_ok
+            total_f = 1 + bool(m.meeting_link) + len(m.participants) + bool(m.time) + bool(m.platform) + len(m.discussion_points) + len(m.action_items)
             status = self._calc_status(
-                core_supported="title" not in unsupported,
-                total_fields=1 + len(m.participants) + bool(m.time) + bool(m.platform) + len(m.discussion_points) + len(m.action_items),
+                core_supported=core_supported,
+                total_fields=total_f,
                 unsupported_count=len(unsupported)
             )
 
@@ -131,6 +175,8 @@ class MetadataVerifier:
                     cleaned_m.time = None
                 if "platform" in unsupported:
                     cleaned_m.platform = None
+                if "meeting_link" in unsupported:
+                    cleaned_m.meeting_link = None
                 verified_meetings.append(cleaned_m)
 
         # ── 2. Verify FileActivity ──────────────────────────────────────────
@@ -313,10 +359,14 @@ class MetadataVerifier:
             raw_text = _get_raw_text(url_ref.source_frame_ids)
             
             unsupported = []
-            if not is_supported(raw_text, url_ref.url):
+            if not is_supported_url(raw_text, url_ref.url):
                 unsupported.append("url")
-            if url_ref.title and not is_supported(raw_text, url_ref.title):
-                unsupported.append("title")
+            if url_ref.title:
+                # Flexible title check: match full title or substantial keyword
+                title_clean = normalize_text(url_ref.title)
+                title_words = [w for w in title_clean.split() if len(w) > 3]
+                if not is_supported(raw_text, url_ref.title) and not any(is_supported(raw_text, w) for w in title_words):
+                    unsupported.append("title")
 
             total_fields = 1 + bool(url_ref.title)
             status = self._calc_status("url" not in unsupported, total_fields, len(unsupported))

@@ -272,16 +272,46 @@ class MetadataExtractor:
 
             combined_str = f"{title}\n{text}"
 
-            # 1. URL Extraction
-            url_matches = re.findall(r"https?://[a-zA-Z0-9\-_.]+(?:/[^\s,;\)\"]*)?", combined_str)
-            for u in url_matches:
-                u_clean = u.rstrip(".,;)")
-                if u_clean not in seen_urls and len(u_clean) > 8:
-                    seen_urls.add(u_clean)
+            # 1. URL & Web Link Extraction (Support both https?:// and scheme-less domain paths)
+            url_candidates: list[tuple[str, str]] = []  # (canonical_url, raw_found)
+
+            # A. Full URL match
+            for m in re.finditer(r"https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+", combined_str):
+                raw_u = m.group(0).rstrip(".,;)\"'>")
+                if len(raw_u) > 8:
+                    url_candidates.append((raw_u, raw_u))
+
+            # B. Scheme-less domain & path match (e.g. meet.google.com/abc-xyz, github.com/user/repo, docs.google.com/document/d/...)
+            domain_url_pattern = r"\b((?:[a-zA-Z0-9\-]+\.)+(?:com|org|net|io|ai|app|so|dev|co|edu|gov|in|us|uk|de|ca|au|me|xyz|tech|info)(?:/[^\s,;\)\"\'<>|]*)?)"
+            for m in re.finditer(domain_url_pattern, combined_str, re.IGNORECASE):
+                raw_u = m.group(1).rstrip(".,;)\"'>")
+                # Filter out obvious non-URL strings like filenames (script.py, doc.pdf)
+                if not re.search(r"\.(?:py|js|ts|tsx|jsx|css|html|json|md|sql|txt|csv|pdf|docx|xlsx|pptx|png|jpg|jpeg|webp|gif|zip|tar|gz|exe|dll)$", raw_u, re.IGNORECASE):
+                    if len(raw_u) >= 6:
+                        canonical = f"https://{raw_u}"
+                        url_candidates.append((canonical, raw_u))
+
+            # C. Google Meet 3-part codes in window title or text (e.g. Meet - abc-defg-hij)
+            meet_code_match = re.search(r"\b([a-z]{3}-[a-z]{4}-[a-z]{3})\b", combined_str, re.IGNORECASE)
+            if meet_code_match and ("meet" in combined_str.lower() or "google" in combined_str.lower()):
+                m_code = meet_code_match.group(1).lower()
+                url_candidates.append((f"https://meet.google.com/{m_code}", f"meet.google.com/{m_code}"))
+
+            # Clean and deduplicate URLs
+            for canonical_u, raw_u in url_candidates:
+                # Ignore localhost, internal noise, and empty strings
+                if any(junk in canonical_u.lower() for junk in ["localhost", "127.0.0.1", "favicon.ico", "riom-dashboard", "wexbw"]):
+                    continue
+                # Normalize trailing slash
+                canonical_clean = canonical_u.rstrip("/")
+                if canonical_clean not in seen_urls and len(canonical_clean) > 10:
+                    seen_urls.add(canonical_clean)
+                    # Deduce meaningful title: document title or window title or domain
+                    doc_title = title if title and not any(ig in title.lower() for ig in _IGNORED_TITLES) else None
                     urls.append(
                         URLReference(
-                            url=u_clean,
-                            title=title or None,
+                            url=canonical_clean,
+                            title=doc_title,
                             source_frame_ids=fids,
                             source_timestamps=tss,
                         )
@@ -354,6 +384,10 @@ class MetadataExtractor:
                     meeting_link = f"https://meet.google.com/{meet_code}"
                     if not platform_found:
                         platform_found = "Google Meet"
+
+            # Ensure meeting_link has https:// scheme
+            if meeting_link and not meeting_link.startswith(("http://", "https://")):
+                meeting_link = f"https://{meeting_link}"
 
             has_meeting_intent = bool(
                 re.search(
