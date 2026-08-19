@@ -16,14 +16,6 @@ _MIN_CONF = 30
 
 
 class TesseractEngine(OCREngine):
-    """
-    pytesseract-based OCR backend.
-
-    Args:
-        lang:           Tesseract language string (default 'eng').
-        min_confidence: Minimum word confidence [0–100].
-        tesseract_cmd:  Override path to tesseract binary.
-    """
 
     def __init__(
         self,

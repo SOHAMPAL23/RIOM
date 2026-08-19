@@ -41,10 +41,25 @@ def main() -> None:
         action="store_true",
         help="Batch process all pending historical OCR and LLM frames in the database.",
     )
+    parser.add_argument(
+        "--tray",
+        "--background",
+        dest="tray",
+        action="store_true",
+        help="Launch application unobtrusively minimized directly in the system tray.",
+    )
+    parser.add_argument(
+        "--video",
+        action="store_true",
+        help="Enable continuous screen video recording in addition to smart keyframe stills.",
+    )
     args = parser.parse_args()
 
     # Ensure storage paths exist
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.video:
+        settings.enable_video_recording = True
 
     if args.process_pending:
         from processing.pipeline_coordinator import PipelineCoordinator
@@ -63,7 +78,7 @@ def main() -> None:
 
     # Launch PySide6 UI
     from ui.main_window import run_app
-    run_app()
+    run_app(minimized_to_tray=args.tray)
 
 
 if __name__ == "__main__":

@@ -223,12 +223,11 @@ class MetadataExtractor:
             "amazon", "aws", "cloudflare", "openai", "groq", "anthropic", "npm", "pip", "pypi"
         }
 
-        # Ignored window title substrings for meetings and appointments
-        _IGNORED_TITLES = [
-            "work memory dashboard", "riom", "whatsapp", "brave", "chrome", "firefox",
-            "edge", "explorer", "terminal", "powershell", "cmd.exe", "netmirror", "new tab",
-            "open", "home", "settings", "task manager", "downloads", "inbox"
-        ]
+        # Ignored blank or internal window titles
+        _IGNORED_TITLES = {
+            "work memory dashboard", "riom", "new tab", "untitled",
+            "task manager", "settings", "home", "downloads", "desktop"
+        }
 
         def _is_noise_file(name: str) -> bool:
             """Filter out OCR gibberish filenames."""
@@ -336,11 +335,38 @@ class MetadataExtractor:
             for fname in clean_files:
                 if fname not in seen_files:
                     seen_files.add(fname)
+                    # Extract file path if visible
+                    path_match = re.search(rf"\b((?:[a-zA-Z]:[\\/]|/|[a-zA-Z0-9_.\-]+[\\/])[a-zA-Z0-9_.\-\\/]*{re.escape(fname)})\b", combined_str)
+                    file_path = path_match.group(1) if path_match else None
+
+                    # Estimate duration from contributing timestamps
+                    start_t = tss[0] if tss else None
+                    end_t = tss[-1] if tss else None
+                    est_dur = None
+                    if start_t and end_t and start_t != end_t:
+                        try:
+                            from datetime import datetime
+                            t1 = datetime.fromisoformat(start_t)
+                            t2 = datetime.fromisoformat(end_t)
+                            diff_sec = int(abs((t2 - t1).total_seconds()))
+                            if diff_sec >= 60:
+                                est_dur = f"{diff_sec // 60}m {diff_sec % 60}s"
+                            else:
+                                est_dur = f"{diff_sec}s"
+                        except Exception:  # noqa: BLE001
+                            pass
+                    elif len(fids) > 1:
+                        est_dur = f"{len(fids) * 5}s"
+
                     files.append(
                         FileActivity(
                             file_name=fname,
+                            file_path=file_path,
                             document_title=title if title and fname not in title else None,
                             application=app or None,
+                            start_time=start_t,
+                            end_time=end_t,
+                            estimated_duration=est_dur,
                             source_frame_ids=fids,
                             source_timestamps=tss,
                         )
@@ -487,10 +513,12 @@ class MetadataExtractor:
             if time_match and has_appt_kw and not is_ignored_window:
                 # Find the line containing the keyword for a descriptive title
                 appt_title = ""
-                for line in combined_str.splitlines():
+                for line in (text.splitlines() + [title]):
+                    if not line.strip():
+                        continue
                     if re.search(r"\b(?:deadline|due|sync|schedule|calendar|roadmap|interview|meeting)\b", line, re.IGNORECASE):
                         clean_line = re.sub(r"[^\w\s\-:–—@.]", " ", line).strip()
-                        if 4 < len(clean_line) <= 70:
+                        if 4 < len(clean_line) <= 70 and not any(br in clean_line.lower() for br in ["chrome", "brave", "edge", "firefox"]):
                             appt_title = clean_line
                             break
 

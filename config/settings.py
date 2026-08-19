@@ -159,6 +159,35 @@ class Settings(BaseSettings):
         description="Maximum number of frames queued between stages.",
     )
 
+    # ------------------------------------------------------------------
+    # Video Recording (Continuous Recording Option)
+    # ------------------------------------------------------------------
+    enable_video_recording: bool = Field(
+        default=False,
+        description="Optionally record continuous screen video in addition to / alongside smart stills.",
+    )
+    video_fps: float = Field(
+        default=2.0,
+        description="Frames per second for continuous screen video recording.",
+    )
+    video_segment_minutes: int = Field(
+        default=15,
+        description="Duration in minutes per video segment file (prevents file corruption).",
+    )
+    video_codec: str = Field(
+        default="mp4v",
+        description="FourCC video codec identifier (e.g. mp4v, XVID, avc1).",
+    )
+
+    # ------------------------------------------------------------------
+    # Application & Tray
+    # ------------------------------------------------------------------
+    minimize_to_tray: bool = Field(
+        default=True,
+        description="Minimize to system tray on window minimize or close.",
+    )
+
 
 # Singleton — import and use `settings` everywhere
 settings = Settings()
+

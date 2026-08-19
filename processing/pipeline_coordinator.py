@@ -104,7 +104,7 @@ class PipelineCoordinator:
 
         self._verifier = MetadataVerifier()
 
-        # Screen Recorder (Stage 1)
+        # Screen Recorder (Stage 1 — Smart Stills)
         self._recorder = ScreenRecorder(
             db=self._db,
             file_manager=self._file_manager,
@@ -115,6 +115,17 @@ class PipelineCoordinator:
             max_capture_interval=settings.max_capture_interval_seconds,
             idle_threshold_seconds=settings.idle_threshold_seconds,
         )
+
+        # Screen Video Recorder (Optional Continuous Video Recording)
+        from capture.video_recorder import ScreenVideoRecorder
+        self._video_recorder = ScreenVideoRecorder(
+            file_manager=self._file_manager,
+            monitor_index=settings.monitor_index,
+            fps=settings.video_fps,
+            segment_minutes=settings.video_segment_minutes,
+            codec=settings.video_codec,
+        )
+        self._video_enabled = settings.enable_video_recording
 
         # Worker threads & control flags
         self._stop_event = threading.Event()
@@ -134,9 +145,14 @@ class PipelineCoordinator:
 
             self._stop_event.clear()
 
-            # Start Stage 1 Screen Recorder
+            # Start Stage 1 Screen Recorder (Stills)
             logger.info("[CAPTURE] Starting ScreenRecorder...")
             self._recorder.start()
+
+            # Start Video Recorder if enabled
+            if self._video_enabled:
+                logger.info("[VIDEO] Starting ScreenVideoRecorder...")
+                self._video_recorder.start()
 
             # Start Stage 2 (OCR Worker) & Stage 3 (Processing/Extraction Worker)
             ocr_worker = threading.Thread(
@@ -164,8 +180,9 @@ class PipelineCoordinator:
             logger.info("PipelineCoordinator stopping...")
             self._stop_event.set()
 
-            # Stop recorder first
+            # Stop recorders first
             self._recorder.stop()
+            self._video_recorder.stop()
 
             # Join worker threads
             for w in self._workers:
@@ -180,14 +197,41 @@ class PipelineCoordinator:
     def pause(self) -> None:
         """Pause capture without stopping downstream processing."""
         self._recorder.pause()
+        if self._video_recorder.is_recording:
+            self._video_recorder.pause()
         if self._on_status:
             self._on_status("PIPELINE", "Pipeline paused")
 
     def resume(self) -> None:
         """Resume capture."""
         self._recorder.resume()
+        if self._video_recorder.is_paused:
+            self._video_recorder.resume()
         if self._on_status:
             self._on_status("PIPELINE", "Pipeline resumed")
+
+    def toggle_video_recording(self, enable: Optional[bool] = None) -> bool:
+        """Toggle or set continuous video recording mode."""
+        if enable is None:
+            self._video_enabled = not self._video_enabled
+        else:
+            self._video_enabled = enable
+
+        if self._video_enabled:
+            if self.is_running and not self._video_recorder.is_recording:
+                self._video_recorder.start()
+        else:
+            if self._video_recorder.is_recording or self._video_recorder.is_paused:
+                self._video_recorder.stop()
+
+        if self._on_status:
+            state_str = "ENABLED" if self._video_enabled else "DISABLED"
+            self._on_status("VIDEO", f"Continuous video recording {state_str}")
+        return self._video_enabled
+
+    def force_capture(self) -> None:
+        """Force a manual screen capture snapshot."""
+        self._recorder.force_capture()
 
     @property
     def is_running(self) -> bool:
@@ -198,8 +242,16 @@ class PipelineCoordinator:
         return self._recorder.is_paused
 
     @property
+    def is_video_recording(self) -> bool:
+        return self._video_recorder.is_recording
+
+    @property
     def recorder(self) -> ScreenRecorder:
         return self._recorder
+
+    @property
+    def video_recorder(self) -> ScreenVideoRecorder:
+        return self._video_recorder
 
     # ------------------------------------------------------------------
     # Worker 1: Stage 2 OCR Loop
@@ -366,7 +418,7 @@ class PipelineCoordinator:
 
     def _poll_pending_llm_frames(self) -> None:
         """Pulls unprocessed OCR frames from DB and runs extraction."""
-        if not self._metadata_extractor or not self._llm_client:
+        if not self._metadata_extractor:
             return
 
         try:

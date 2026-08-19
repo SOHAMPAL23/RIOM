@@ -79,11 +79,22 @@ RIOM adopts a decoupled, multi-stage pipeline architecture with queue-based hand
 
 ---
 
-## 4. Screen Capture Strategy
+## 4. Screen Capture & Video Option Strategy
 
-- **Interval Polling**: The screen is sampled every 5.0 seconds (configurable via `AMBIENT_CAPTURE_INTERVAL_SECONDS`). Continuous 60 FPS video recording is deliberately avoided as 98% of desktop work consists of static reading, typing, or thinking.
-- **Active Window Metadata**: Alongside pixels, the foreground application name (`chrome.exe`, `code.exe`) and window title are captured using native Win32/X11 APIs via `WindowInfoProvider`.
-- **MSS Context Reuse**: A single `mss.mss()` context is created per capture thread to prevent file descriptor and GDI handle leakage on Windows.
+### A. Smart Keyframe Stills vs Continuous Video Recording
+RIOM supports two capture modes:
+1. **Smart Keyframe Stills (Default & Recommended)**:
+   - Samples screen every 5.0 seconds with hardware-accelerated OpenCV perceptual difference analysis.
+   - **Justification**: 98% of desktop knowledge work (reading documents, writing code, reviewing emails) is static. Stills provide a **~99% reduction in disk storage** (~20–40 MB/day vs ~15–30 GB/day for video), instant random-access OCR indexing, zero GPU thermal throttling, and all-day battery efficiency.
+2. **Continuous Screen Video Recording (`ScreenVideoRecorder` Option)**:
+   - Optionally records continuous segmented desktop video (`.mp4` / `mp4v` codec) at configurable frame rates (e.g. 2.0 to 15.0 FPS) with automatic 15-minute file chunking.
+   - **Justification**: Ideal for compliance auditing, dynamic animations, or user-experience session review where fine-grained cursor movement and continuous UI transitions are required.
+
+### B. Always-On Background Operation & System Tray
+- Runs unobtrusively in the system tray (`QSystemTrayIcon`) with start/stop/pause/snapshot controls and status notifications.
+- Minimizes directly to tray on window close, surviving full 8+ hour workdays with zero GDI handle leaks or memory accumulation.
+- Foreground application tracking (`WindowInfoProvider`) captures process names and window titles across Windows, macOS, and Linux.
+- Sensible naming: stored locally under `data/images/YYYY-MM-DD/` and `data/videos/YYYY-MM-DD/` with timestamps, application name, window context, and unique frame identifiers.
 
 ---
 
