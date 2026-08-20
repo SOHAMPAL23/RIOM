@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from capture.models import CaptureRecord
 from capture.screen_recorder import ScreenRecorder
+from capture.mic_listener import get_mic_listener, MicTranscriptListener
 from config.settings import settings
 from metadata.extractor import MetadataExtractor
 from metadata.llm_client import LLMClient
@@ -133,6 +134,18 @@ class PipelineCoordinator:
         )
         self._video_enabled = settings.enable_video_recording
 
+        # Microphone speech-to-text listener (auto-activates during meetings)
+        try:
+            self._mic_listener: Optional[MicTranscriptListener] = get_mic_listener(
+                transcript_dir=settings.meeting_notes_dir,
+                on_transcript=lambda ts, text: (
+                    self._on_status("MIC_STT", f"[{ts}] {text}") if self._on_status else None
+                ),
+            )
+        except Exception as mic_exc:  # noqa: BLE001
+            logger.warning("[MIC_STT] Could not initialise mic listener: %s", mic_exc)
+            self._mic_listener = None
+
         # Worker threads & control flags
         self._stop_event = threading.Event()
         self._workers: list[threading.Thread] = []
@@ -177,6 +190,15 @@ class PipelineCoordinator:
                 w.start()
 
             logger.info("PipelineCoordinator: all background workers active.")
+
+            # Start mic listener so speech is captured from the start
+            if self._mic_listener is not None:
+                try:
+                    self._mic_listener.start()
+                    logger.info("[MIC_STT] Microphone listener started with pipeline.")
+                except Exception as mic_exc:  # noqa: BLE001
+                    logger.warning("[MIC_STT] Could not start mic listener: %s", mic_exc)
+
             if self._on_status:
                 self._on_status("PIPELINE", "All pipeline stages running")
 
@@ -196,6 +218,11 @@ class PipelineCoordinator:
                     w.join(timeout=5)
 
             self._workers.clear()
+
+            # Stop mic listener
+            if self._mic_listener is not None and self._mic_listener.is_running:
+                self._mic_listener.stop()
+
             logger.info("PipelineCoordinator stopped cleanly.")
             if self._on_status:
                 self._on_status("PIPELINE", "Pipeline stopped")
@@ -410,19 +437,47 @@ class PipelineCoordinator:
             for ev in evidences:
                 self._db.save_fact_evidence(ev)
 
-            # ── Automatic Meeting Notes File Generation ──
+            # ── Automatic Meeting Transcript File Generation (.txt) ──
             if verified_metadata.meetings and settings.auto_generate_meeting_notes:
                 try:
+                    # Build per-frame data so transcripts have timestamps
+                    frame_data_map: dict[int, dict] = {
+                        r.frame_id: {
+                            "text": r.raw_text,
+                            "timestamp": r.timestamp.isoformat(),
+                        }
+                        for r in batch
+                        if r.frame_id and r.raw_text.strip()
+                    }
+                    # Pass raw text map as expected by process_and_save_all
                     saved_notes = self._notes_generator.process_and_save_all(
                         metadata=verified_metadata,
-                        raw_context_map=raw_text_map,
+                        raw_context_map={fid: d["text"] for fid, d in frame_data_map.items()},
                     )
                     for n_path in saved_notes:
-                        logger.info("[MEETING_NOTES] Saved ambient meeting notes file: %s", n_path)
+                        logger.info("[MEETING_TRANSCRIPT] Saved raw speech-to-text transcript: %s", n_path)
                         if self._on_status:
-                            self._on_status("MEETING_NOTES", f"Saved meeting notes: {n_path.name}")
+                            self._on_status("MEETING_TRANSCRIPT", f"Saved transcript: {n_path.name}")
+
+                    # ── Point mic listener at the active meeting transcript ──
+                    # The mic listener will now append live spoken words to this .txt file
+                    if saved_notes and self._mic_listener is not None:
+                        active_meeting = verified_metadata.meetings[0]
+                        try:
+                            self._mic_listener.set_transcript_path(saved_notes[0])
+                            logger.info(
+                                "[MIC_STT] Mic listener pointed at: %s", saved_notes[0].name
+                            )
+                            if self._on_status:
+                                self._on_status(
+                                    "MIC_STT",
+                                    f"🎤 Mic capturing speech → {saved_notes[0].name}",
+                                )
+                        except Exception as mic_exc:  # noqa: BLE001
+                            logger.warning("[MIC_STT] Could not update transcript path: %s", mic_exc)
+
                 except Exception as note_exc:  # noqa: BLE001
-                    logger.warning("[MEETING_NOTES] Failed saving meeting notes: %s", note_exc)
+                    logger.warning("[MEETING_TRANSCRIPT] Failed saving transcript: %s", note_exc)
 
             # Mark all contributing frames as LLM processed
             for fid in frame_ids:

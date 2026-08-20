@@ -523,32 +523,32 @@ class MetadataExtractor:
                         if em.lower() not in [e.lower() for e in meeting_emails] and not em.lower().startswith(("noreply", "no-reply", "support")):
                             meeting_emails.append(em)
 
-                    # Extract discussion points and action items
+                    # Extract actual speech/subtitle lines verbatim from OCR text
+                    from processing.meeting_notes import extract_speech_lines
+                    speech_lines = extract_speech_lines(combined_str)
+
                     discussion_pts: list[str] = []
                     action_items: list[str] = []
                     in_action_section = False
-                    in_disc_section = False
 
-                    for line in combined_str.splitlines():
-                        line_s = line.strip()
+                    for line_s in combined_str.splitlines():
+                        line_s = line_s.strip()
                         if not line_s:
                             continue
                         if re.search(r"\b(?:action items?|tasks?|to-?do)\b", line_s, re.IGNORECASE):
                             in_action_section = True
-                            in_disc_section = False
                             continue
-                        elif re.search(r"\b(?:discussion|agenda|notes?|topics?)\b", line_s, re.IGNORECASE):
-                            in_disc_section = True
-                            in_action_section = False
-                            continue
-
                         if line_s.startswith(("-", "*", "•", "–")) or re.match(r"^\d+[\.\)]\s+", line_s):
                             clean_pt = re.sub(r"^[-*•–\d\.\)]+\s*", "", line_s).strip()
                             if len(clean_pt) > 5:
                                 if in_action_section or re.search(r"\b(?:to review|to test|to build|to follow up|assigned to)\b", clean_pt, re.IGNORECASE):
                                     action_items.append(clean_pt)
-                                elif in_disc_section or len(discussion_pts) < 4:
+                                elif len(discussion_pts) < 6:
                                     discussion_pts.append(clean_pt)
+
+                    # Fill discussion_pts with actual speech lines if none found from bullet points
+                    if not discussion_pts:
+                        discussion_pts = speech_lines[:6]
 
                     meetings.append(
                         Meeting(
@@ -558,7 +558,7 @@ class MetadataExtractor:
                             platform=platform_found,
                             meeting_link=meeting_link,
                             emails=meeting_emails[:5],
-                            discussion_points=discussion_pts[:5],
+                            discussion_points=discussion_pts[:6],
                             action_items=action_items[:5],
                             source_frame_ids=fids,
                             source_timestamps=tss,

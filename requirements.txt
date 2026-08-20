@@ -28,5 +28,9 @@ Pillow>=10.3.0          # WebP read support (OpenCV handles writes)
 pytest>=8.2.0
 pytest-cov>=5.0.0
 
+# Microphone speech-to-text capture
+SpeechRecognition>=3.10.0  # Google STT + offline engines
+sounddevice>=0.4.6         # Cross-platform microphone access
+
 # Optional: env file support
 python-dotenv>=1.0.0

@@ -54,7 +54,7 @@ try:
     from processing.pipeline_coordinator import PipelineCoordinator
     from capture.simulation import run_simulation
     from metadata.schemas import Meeting
-    from processing.meeting_notes import MeetingNotesGenerator, sanitize_filename
+    from processing.meeting_notes import MeetingNotesGenerator, MeetingTranscriptSaver, sanitize_filename
     _PIPELINE_AVAILABLE = True
 except Exception:  # noqa: BLE001
     _PIPELINE_AVAILABLE = False
@@ -1326,7 +1326,7 @@ class MainWindow(QMainWindow):
             actions_h.setContentsMargins(10, 4, 0, 0)
             actions_h.setSpacing(8)
 
-            btn_open_notes = QPushButton("📝 Open Notes (.md)")
+            btn_open_notes = QPushButton("📄 Open Transcript (.txt)")
             btn_open_notes.setFixedHeight(22)
             btn_open_notes.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_open_notes.setStyleSheet(f"""
@@ -1351,18 +1351,30 @@ class MainWindow(QMainWindow):
                     notes_dir.mkdir(parents=True, exist_ok=True)
                     date_prefix = datetime.now().strftime("%Y-%m-%d")
                     safe_title = sanitize_filename(m_title)
-                    target_file = notes_dir / f"{date_prefix}_{safe_title}.md"
+                    # Prefer .txt transcript; fall back to .md if it exists from a prior version
+                    target_file = notes_dir / f"{date_prefix}_{safe_title}.txt"
                     if not target_file.exists():
-                        m_obj = Meeting.model_validate(m_payload)
-                        gen = MeetingNotesGenerator(output_dir=notes_dir)
-                        target_file = gen.save_meeting_notes(m_obj)
+                        md_file = notes_dir / f"{date_prefix}_{safe_title}.md"
+                        if md_file.exists():
+                            target_file = md_file
+                        else:
+                            # Generate a fresh .txt transcript on demand
+                            m_obj = Meeting.model_validate(m_payload)
+                            saver = MeetingTranscriptSaver(output_dir=notes_dir)
+                            target_file = saver.save_transcript_txt(
+                                meeting_title=m_obj.title,
+                                raw_frames=[],
+                                meeting_link=getattr(m_obj, "meeting_link", None),
+                                platform=getattr(m_obj, "platform", None),
+                                source_timestamps=getattr(m_obj, "source_timestamps", None),
+                            )
                     QDesktopServices.openUrl(QUrl.fromLocalFile(str(target_file.resolve())))
                 return _handler
 
             btn_open_notes.clicked.connect(_make_open_notes_handler(title, d if isinstance(d, dict) else {}))
             actions_h.addWidget(btn_open_notes)
 
-            btn_notes_folder = QPushButton("📂 Notes Folder")
+            btn_notes_folder = QPushButton("📂 Transcripts Folder")
             btn_notes_folder.setFixedHeight(22)
             btn_notes_folder.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_notes_folder.setStyleSheet(f"""
