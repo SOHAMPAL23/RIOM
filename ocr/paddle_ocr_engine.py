@@ -1,7 +1,7 @@
 """
 ocr/paddle_ocr_engine.py
 
-PaddleOCR backend implementing the OCREngine interface.
+PaddleOCR backend implementing the OCRProvider / OCREngine interface.
 
 Characteristics
 ---------------
@@ -21,7 +21,7 @@ from typing import Optional
 
 import numpy as np
 
-from ocr.base import OCREngine
+from ocr.base import OCRProvider
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,9 @@ class BoundingBox:
     x2: int
     y2: int
 
+    def to_dict(self) -> dict[str, int]:
+        return {"x1": self.x1, "y1": self.y1, "x2": self.x2, "y2": self.y2}
+
 
 @dataclass
 class TextBlock:
@@ -45,6 +48,13 @@ class TextBlock:
     text: str
     confidence: float
     bbox: BoundingBox
+
+    def to_dict(self) -> dict:
+        return {
+            "text": self.text,
+            "confidence": round(self.confidence, 4),
+            "bbox": self.bbox.to_dict(),
+        }
 
 
 @dataclass
@@ -54,18 +64,35 @@ class OCRResult:
 
     Fields
     ------
-    blocks      Detected text blocks in reading order.
-    error       Non-empty if the engine failed; blocks will be empty.
-    engine      Name of the backend that produced this result.
+    blocks          Detected text blocks in reading order.
+    error           Non-empty if the engine failed; blocks will be empty.
+    engine          Name of the backend that produced this result.
+    processing_time Duration of OCR execution in seconds.
     """
-    blocks:  list[TextBlock] = field(default_factory=list)
-    error:   Optional[str]   = None
-    engine:  str             = "unknown"
+    blocks:          list[TextBlock] = field(default_factory=list)
+    error:           Optional[str]   = None
+    engine:          str             = "unknown"
+    processing_time: float           = 0.0
 
     @property
     def full_text(self) -> str:
         """All text joined by newlines, in reading order."""
         return "\n".join(b.text for b in self.blocks if b.text.strip())
+
+    @property
+    def text(self) -> str:
+        """Alias for full_text."""
+        return self.full_text
+
+    @property
+    def bounding_boxes(self) -> list[TextBlock]:
+        """Alias for blocks."""
+        return self.blocks
+
+    @property
+    def provider(self) -> str:
+        """Alias for engine."""
+        return self.engine
 
     @property
     def is_empty(self) -> bool:
@@ -79,12 +106,17 @@ class OCRResult:
             return 0.0
         return sum(b.confidence for b in self.blocks) / len(self.blocks)
 
+    @property
+    def confidence(self) -> float:
+        """Alias for mean_confidence."""
+        return self.mean_confidence
+
 
 # ---------------------------------------------------------------------------
 # PaddleOCR engine
 # ---------------------------------------------------------------------------
 
-class PaddleOCREngine(OCREngine):
+class PaddleOCREngine(OCRProvider):
     """
     Thread-safe PaddleOCR wrapper.
 

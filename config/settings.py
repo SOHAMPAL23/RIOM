@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     def log_file(self) -> Path:
         return self.data_dir / "ambient.log"
 
+    @property
+    def meeting_notes_dir(self) -> Path:
+        p = self.data_dir / "meeting_notes"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    auto_generate_meeting_notes: bool = Field(
+        default=True,
+        description="Automatically generate and save Markdown meeting notes when meetings are detected.",
+    )
+
     # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------

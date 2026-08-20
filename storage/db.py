@@ -752,3 +752,145 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_records_by_time(self, start: datetime, end: datetime) -> list[dict]:
+        """Query raw text records within a timestamp range."""
+        conn = self._conn()
+        rows = conn.execute(
+            """
+            SELECT * FROM raw_text_records
+            WHERE timestamp BETWEEN ? AND ?
+            ORDER BY timestamp DESC
+            """,
+            (start.isoformat(), end.isoformat()),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_records_by_application(self, application: str, limit: int = 100) -> list[dict]:
+        """Query raw text records for a given application."""
+        conn = self._conn()
+        rows = conn.execute(
+            """
+            SELECT * FROM raw_text_records
+            WHERE application = ?
+            ORDER BY timestamp DESC LIMIT ?
+            """,
+            (application, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_record(self, record_id: int) -> Optional[dict]:
+        """Fetch a specific raw text record by its primary key ID."""
+        conn = self._conn()
+        row = conn.execute(
+            "SELECT * FROM raw_text_records WHERE id = ? LIMIT 1",
+            (record_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_source_frames(self, record_id: int) -> list[dict]:
+        """Retrieve the source frame(s) corresponding to a raw text record."""
+        rec = self.get_record(record_id)
+        if not rec:
+            return []
+        conn = self._conn()
+        frame_id = rec.get("frame_id")
+        if not frame_id:
+            return []
+        rows = conn.execute("SELECT * FROM frames WHERE id = ?", (frame_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def answer_query(self, question: str) -> dict[str, Any]:
+        """
+        Answers natural language queries against extracted metadata and raw text.
+        Supports demo questions like:
+        - 'What happened between 10 AM and 12 PM?'
+        - 'Which files did I work on?'
+        - 'Which meetings did I attend?'
+        - 'Who appeared repeatedly today?'
+        - 'What deadlines were visible?'
+        - 'What applications did I use?'
+        - 'Show the source frame for this extracted fact.'
+        """
+        q = question.lower()
+        conn = self._conn()
+
+        if "file" in q or "work on" in q or "code" in q:
+            entities = self.get_entities_by_type("file_activity")
+            results = []
+            for e in entities:
+                p = json.loads(e["payload"]) if isinstance(e["payload"], str) else e["payload"]
+                name = p.get("file_name") or p.get("document_title") or "Unnamed file"
+                results.append({
+                    "entity": name,
+                    "application": p.get("application"),
+                    "duration": p.get("estimated_duration"),
+                    "source_frame": p.get("source_frame_ids"),
+                })
+            return {"query": question, "category": "files", "count": len(results), "results": results}
+
+        elif "meeting" in q or "call" in q or "sync" in q or "attend" in q:
+            entities = self.get_entities_by_type("meeting")
+            results = []
+            for e in entities:
+                p = json.loads(e["payload"]) if isinstance(e["payload"], str) else e["payload"]
+                results.append({
+                    "title": p.get("title"),
+                    "platform": p.get("platform"),
+                    "participants": p.get("participants"),
+                    "discussion_points": p.get("discussion_points"),
+                    "action_items": p.get("action_items"),
+                    "source_frame": p.get("source_frame_ids"),
+                })
+            return {"query": question, "category": "meetings", "count": len(results), "results": results}
+
+        elif "who" in q or "people" in q or "person" in q or "appear" in q:
+            entities = self.get_entities_by_type("person")
+            results = []
+            for e in entities:
+                p = json.loads(e["payload"]) if isinstance(e["payload"], str) else e["payload"]
+                results.append({
+                    "name": p.get("name"),
+                    "email": p.get("email"),
+                    "organization": p.get("organization"),
+                    "source_frame": p.get("source_frame_ids"),
+                })
+            return {"query": question, "category": "people", "count": len(results), "results": results}
+
+        elif "deadline" in q or "appointment" in q or "reminder" in q or "due" in q:
+            entities = self.get_entities_by_type("appointment")
+            results = []
+            for e in entities:
+                p = json.loads(e["payload"]) if isinstance(e["payload"], str) else e["payload"]
+                results.append({
+                    "title": p.get("title"),
+                    "time": p.get("time"),
+                    "deadline": p.get("deadline"),
+                    "reminder": p.get("reminder"),
+                    "source_frame": p.get("source_frame_ids"),
+                })
+            return {"query": question, "category": "deadlines", "count": len(results), "results": results}
+
+        elif "application" in q or "apps" in q:
+            rows = conn.execute("SELECT DISTINCT application, COUNT(*) as frame_count FROM frames WHERE application IS NOT NULL GROUP BY application").fetchall()
+            results = [{"application": r["application"], "frame_count": r["frame_count"]} for r in rows]
+            return {"query": question, "category": "applications", "count": len(results), "results": results}
+
+        elif "source frame" in q or "evidence" in q:
+            evs = conn.execute("SELECT * FROM fact_evidences ORDER BY id DESC LIMIT 20").fetchall()
+            results = []
+            for ev in evs:
+                f_data = json.loads(ev["fact"]) if isinstance(ev["fact"], str) else ev["fact"]
+                results.append({
+                    "fact_id": ev["fact_id"],
+                    "fact_type": ev["fact_type"],
+                    "source_frame": ev["source_frame"],
+                    "evidence_text": ev["evidence_text"],
+                    "verification_status": ev["verification_status"],
+                })
+            return {"query": question, "category": "fact_evidences", "count": len(results), "results": results}
+
+        else:
+            # Default: general activity summary
+            frames = self.get_capture_records(limit=20)
+            return {"query": question, "category": "activity_timeline", "count": len(frames), "results": frames}
+

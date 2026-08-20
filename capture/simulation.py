@@ -466,11 +466,21 @@ def run_simulation(
         timestamps_map=timestamps_map,
     )
 
-    # 8. Stage 4: SQLite Storage
+    # 8. Stage 4: SQLite Storage & Meeting Notes Generation
     logger.info("▶ [Stage 4: Storage] Storing verified metadata and fact evidence...")
     db.save_metadata(verified_metadata)
     for ev in evidences:
         db.save_fact_evidence(ev)
+
+    # Automatically generate meeting notes markdown files
+    from processing.meeting_notes import MeetingNotesGenerator
+    notes_gen = MeetingNotesGenerator(output_dir=settings.meeting_notes_dir)
+    saved_notes = notes_gen.process_and_save_all(
+        metadata=verified_metadata,
+        raw_context_map=raw_text_map,
+    )
+    for np_path in saved_notes:
+        logger.info("[SIMULATION] Meeting notes saved to file: %s", np_path)
 
     for rec in all_raw_records:
         db.mark_frame_llm_done(rec.frame_id)

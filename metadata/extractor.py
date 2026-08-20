@@ -141,10 +141,78 @@ class MetadataExtractor:
         logger.info("[METADATA] Running dynamic heuristic extraction on screen records...")
         return self._heuristic_extract(records)
 
+    @staticmethod
+    def group_context_windows(
+        records: list[Union[RawTextRecord, MergedTextRecord]],
+        max_window_seconds: float = 900.0,
+        split_by_app: bool = True,
+    ) -> list[list[Union[RawTextRecord, MergedTextRecord]]]:
+        """
+        Groups raw-text records into logical context windows based on:
+        - temporal proximity (max_window_seconds, default 15 mins)
+        - application continuity
+        - window title proximity
+        """
+        if not records:
+            return []
+
+        # Sort chronologically
+        sorted_records = sorted(
+            records,
+            key=lambda r: getattr(r, "timestamp", None)
+            or getattr(r, "first_timestamp", None)
+            or datetime.now(timezone.utc),
+        )
+
+        windows: list[list[Union[RawTextRecord, MergedTextRecord]]] = []
+        current_window: list[Union[RawTextRecord, MergedTextRecord]] = []
+
+        for rec in sorted_records:
+            if not current_window:
+                current_window.append(rec)
+                continue
+
+            prev = current_window[-1]
+            t_prev = getattr(prev, "timestamp", None) or getattr(prev, "last_timestamp", None)
+            t_curr = getattr(rec, "timestamp", None) or getattr(rec, "first_timestamp", None)
+            app_prev = getattr(prev, "application", "") or ""
+            app_curr = getattr(rec, "application", "") or ""
+
+            # Check time diff
+            time_gap = 0.0
+            if t_prev and t_curr:
+                try:
+                    time_gap = abs((t_curr - t_prev).total_seconds())
+                except Exception:
+                    time_gap = 0.0
+
+            app_changed = split_by_app and bool(app_prev and app_curr and app_prev.lower() != app_curr.lower())
+
+            if time_gap > max_window_seconds or app_changed:
+                windows.append(current_window)
+                current_window = [rec]
+            else:
+                current_window.append(rec)
+
+        if current_window:
+            windows.append(current_window)
+
+        return windows
+
+    @staticmethod
+    def _clean_json_str(raw_str: str) -> str:
+        """Strip markdown code blocks or wrapping quotes from LLM JSON response."""
+        text = raw_str.strip()
+        if text.startswith("```"):
+            # Remove leading ```json or ```
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        return text.strip()
+
     def _extract_with_llm(
         self, records: list[Union[RawTextRecord, MergedTextRecord]]
     ) -> Optional[StructuredMetadata]:
-        """Runs LLM extraction via prompt."""
+        """Runs LLM extraction via prompt with structured repair & validation."""
         formatted_segments: list[str] = []
         for rec in records:
             fid = getattr(rec, "frame_id", None) or getattr(rec, "id", None) or 0
@@ -176,12 +244,12 @@ class MetadataExtractor:
         formatted_logs = "\n\n---\n\n".join(formatted_segments)
         user_prompt = _USER_PROMPT_TEMPLATE.format(formatted_logs=formatted_logs)
 
-        raw_json = ""
         for attempt in range(1, self._max_validation_retries + 2):
             try:
                 assert self._client is not None
-                raw_json = self._client.complete(_SYSTEM_PROMPT, user_prompt)
-                data = json.loads(raw_json)
+                raw_response = self._client.complete(_SYSTEM_PROMPT, user_prompt)
+                cleaned_json = self._clean_json_str(raw_response)
+                data = json.loads(cleaned_json)
                 metadata = StructuredMetadata.model_validate(data)
                 self._ensure_provenance(metadata, records)
                 return metadata

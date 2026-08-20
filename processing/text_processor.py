@@ -63,6 +63,11 @@ _MIN_CONTENT_CHARS = 2
 
 
 class ArtifactCleaner:
+    """
+    Cleans OCR noise while strictly preserving URLs, filenames, dates, times,
+    and meaningful domain terms.
+    """
+
     def clean(self, text: str) -> str:
         if not text:
             return text
@@ -84,6 +89,10 @@ class ArtifactCleaner:
         if not line:
             return False   # Keep empty lines — they are structural
 
+        # Never drop lines containing URLs, emails, filenames, or meet codes
+        if any(marker in line.lower() for marker in ["http://", "https://", "@", "meet.", "zoom.", ".py", ".md", ".json", ".ts", ".js"]):
+            return False
+
         # Too few meaningful characters
         content = line.replace(" ", "").replace("\t", "")
         if len(content) < _MIN_CONTENT_CHARS:
@@ -95,6 +104,10 @@ class ArtifactCleaner:
                 return True
 
         return False
+
+
+# Alias for spec compliance
+TextCleaner = ArtifactCleaner
 
 
 # ===========================================================================
@@ -345,6 +358,10 @@ class FrameGroupMerger:
         if extra_lines:
             return base_text.rstrip() + "\n" + "\n".join(extra_lines)
         return base_text
+
+
+# Alias for spec compliance
+TextStitcher = FrameGroupMerger
 
 
 # ===========================================================================

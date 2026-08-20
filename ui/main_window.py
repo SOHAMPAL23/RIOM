@@ -53,6 +53,8 @@ try:
     from capture.logging_setup import configure_logging
     from processing.pipeline_coordinator import PipelineCoordinator
     from capture.simulation import run_simulation
+    from metadata.schemas import Meeting
+    from processing.meeting_notes import MeetingNotesGenerator, sanitize_filename
     _PIPELINE_AVAILABLE = True
 except Exception:  # noqa: BLE001
     _PIPELINE_AVAILABLE = False
@@ -560,6 +562,10 @@ class MainWindow(QMainWindow):
         act_folder.triggered.connect(self._on_open_storage_clicked)
         tray_menu.addAction(act_folder)
 
+        act_notes = QAction("Open Meeting Notes Folder", self)
+        act_notes.triggered.connect(self._on_open_meeting_notes_clicked)
+        tray_menu.addAction(act_notes)
+
         tray_menu.addSeparator()
 
         act_quit = QAction("Quit RIOM", self)
@@ -1024,6 +1030,13 @@ class MainWindow(QMainWindow):
             img_dir.mkdir(parents=True, exist_ok=True)
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(img_dir)))
 
+    def _on_open_meeting_notes_clicked(self) -> None:
+        """Open the ambient meeting notes folder in Explorer."""
+        if settings:
+            notes_dir = settings.meeting_notes_dir
+            notes_dir.mkdir(parents=True, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(notes_dir)))
+
     def _on_demo_clicked(self) -> None:
         self._btn_demo.setEnabled(False)
         self._status_pill.set_state("active", "LOADING SIMULATION...")
@@ -1307,6 +1320,71 @@ class MainWindow(QMainWindow):
                 act_w = _label(f"✓ Tasks: {' | '.join(action_items[:2])}", size=10, color=C_EMERALD)
                 act_w.setContentsMargins(10, 0, 0, 0)
                 cv.addWidget(act_w)
+
+            # Meeting Notes File Actions Row
+            actions_h = QHBoxLayout()
+            actions_h.setContentsMargins(10, 4, 0, 0)
+            actions_h.setSpacing(8)
+
+            btn_open_notes = QPushButton("📝 Open Notes (.md)")
+            btn_open_notes.setFixedHeight(22)
+            btn_open_notes.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_open_notes.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C_CYAN}15;
+                    color: {C_CYAN};
+                    border: 1px solid {C_CYAN}40;
+                    border-radius: 3px;
+                    font-size: 9px;
+                    font-weight: 700;
+                    font-family: {FONT_UI};
+                    padding: 0 8px;
+                }}
+                QPushButton:hover {{
+                    background: {C_CYAN}30;
+                }}
+            """)
+
+            def _make_open_notes_handler(m_title: str, m_payload: dict):
+                def _handler():
+                    notes_dir = settings.meeting_notes_dir if settings else Path.home() / ".ambient_screen" / "meeting_notes"
+                    notes_dir.mkdir(parents=True, exist_ok=True)
+                    date_prefix = datetime.now().strftime("%Y-%m-%d")
+                    safe_title = sanitize_filename(m_title)
+                    target_file = notes_dir / f"{date_prefix}_{safe_title}.md"
+                    if not target_file.exists():
+                        m_obj = Meeting.model_validate(m_payload)
+                        gen = MeetingNotesGenerator(output_dir=notes_dir)
+                        target_file = gen.save_meeting_notes(m_obj)
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(target_file.resolve())))
+                return _handler
+
+            btn_open_notes.clicked.connect(_make_open_notes_handler(title, d if isinstance(d, dict) else {}))
+            actions_h.addWidget(btn_open_notes)
+
+            btn_notes_folder = QPushButton("📂 Notes Folder")
+            btn_notes_folder.setFixedHeight(22)
+            btn_notes_folder.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_notes_folder.setStyleSheet(f"""
+                QPushButton {{
+                    background: {C_SURFACE};
+                    color: {C_TEXT_MUTED};
+                    border: 1px solid {C_BORDER};
+                    border-radius: 3px;
+                    font-size: 9px;
+                    font-family: {FONT_UI};
+                    padding: 0 6px;
+                }}
+                QPushButton:hover {{
+                    background: {C_SURFACE_HOVER};
+                    color: {C_TEXT};
+                }}
+            """)
+            btn_notes_folder.clicked.connect(self._on_open_meeting_notes_clicked)
+            actions_h.addWidget(btn_notes_folder)
+            actions_h.addStretch()
+
+            cv.addLayout(actions_h)
 
             layout.addWidget(card)
 

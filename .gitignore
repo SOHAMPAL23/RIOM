@@ -93,3 +93,4 @@ hf_hub/
 Thumbs.db
 ehthumbs.db
 
+.env.example

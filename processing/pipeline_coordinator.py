@@ -21,6 +21,7 @@ from metadata.schemas import StructuredMetadata, FactEvidence
 from metadata.verifier import MetadataVerifier
 from ocr.models import RawTextRecord
 from ocr.pipeline import OCRPipeline
+from processing.meeting_notes import MeetingNotesGenerator
 from processing.models import MergedTextRecord
 from processing.privacy_filter import PrivacyFilter
 from processing.text_processor import TextProcessor, TextProcessorConfig
@@ -75,6 +76,11 @@ class PipelineCoordinator:
                 min_chars_to_compare=settings.text_min_chars_to_compare,
                 merge_groups=True,
             )
+        )
+
+        # Meeting notes file generator
+        self._notes_generator = MeetingNotesGenerator(
+            output_dir=settings.meeting_notes_dir,
         )
 
         # LLM Extractor (optional if API key is not configured)
@@ -403,6 +409,20 @@ class PipelineCoordinator:
 
             for ev in evidences:
                 self._db.save_fact_evidence(ev)
+
+            # ── Automatic Meeting Notes File Generation ──
+            if verified_metadata.meetings and settings.auto_generate_meeting_notes:
+                try:
+                    saved_notes = self._notes_generator.process_and_save_all(
+                        metadata=verified_metadata,
+                        raw_context_map=raw_text_map,
+                    )
+                    for n_path in saved_notes:
+                        logger.info("[MEETING_NOTES] Saved ambient meeting notes file: %s", n_path)
+                        if self._on_status:
+                            self._on_status("MEETING_NOTES", f"Saved meeting notes: {n_path.name}")
+                except Exception as note_exc:  # noqa: BLE001
+                    logger.warning("[MEETING_NOTES] Failed saving meeting notes: %s", note_exc)
 
             # Mark all contributing frames as LLM processed
             for fid in frame_ids:
