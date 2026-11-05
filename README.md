@@ -180,7 +180,7 @@ CaptureRecord(
 - Wayland is **not supported** by MSS. On Wayland-only systems,
   capture will fail. Use `XWayland` compatibility mode as a workaround.
 
----
+
 
 ## Troubleshooting
 
