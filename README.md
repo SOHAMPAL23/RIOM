@@ -152,7 +152,7 @@ CaptureRecord(
 
 ## Platform-Specific Limitations
 
-### Windows ✅ (fully supported)
+### Windows (fully supported)
 
 - Window title and application name are read via `ctypes` + Win32 API
   (`GetForegroundWindow`, `QueryFullProcessImageNameW`).
